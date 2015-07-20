@@ -24,7 +24,7 @@ from oslo_utils import timeutils
 from oslo_utils import units
 import six
 
-from cinder.openstack.common import loopingcall
+from oslo_service import loopingcall
 from cinder import utils as cinder_utils
 from cinder.volume.drivers.san.hp import hp_xp_common as common
 from cinder.volume.drivers.san.hp import hp_xp_exception as exception
