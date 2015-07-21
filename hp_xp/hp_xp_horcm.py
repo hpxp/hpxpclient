@@ -791,7 +791,7 @@ class HPXPHORCM(common.HPXPCommon):
         inst = self.conf.hpxp_horcm_numbers[_PAIR_HORCMGR]
 
         for mun in xrange(_MAX_MUNS):
-            copy_group = _COPY_GROUP % (host_ip, serial, inst, mun)
+            copy_group = _COPY_GROUP % (host_ip, serial, int(inst), mun)
             self._copy_groups[mun] = copy_group
         LOG.debug('Setting copy_groups: %s', self._copy_groups)
 
