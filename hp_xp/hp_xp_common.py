@@ -25,8 +25,10 @@ from oslo_utils import units
 import six
 
 from cinder import utils as cinder_utils
+from cinder.i18n import _, _LI
 from cinder.volume.drivers.san.hp import hp_xp_exception as exception
 from cinder.volume.drivers.san.hp import hp_xp_opts as opts
+from cinder.volume.drivers.san.hp import hp_xp_traceutils as traceutils
 from cinder.volume.drivers.san.hp import hp_xp_utils as utils
 from cinder.volume import utils as volume_utils
 from cinder.zonemanager import utils as fczm_utils
@@ -72,10 +74,11 @@ _DRIVER_INFO = {
 }
 
 CONF = cfg.CONF
-CONF.register_opts(opts.COMMON_VOLUME_OPTS)
 CONF.register_opts(_COMMON_VOLUME_OPTS)
+CONF.register_opts(_FC_VOLUME_OPTS)
 
 LOG = logging.getLogger(__name__)
+HLOG = logging.getLogger(traceutils.HLOG_NAME)
 
 
 def _str2int(num):
@@ -116,6 +119,7 @@ class HPXPCommon(object):
         self._stats = {}
         self._lookup_service = fczm_utils.create_lookup_service()
 
+    @traceutils.trace_function(loglevel=traceutils.DEBUG)
     def run_and_verify_storage_cli(self, *cmd, **kwargs):
         do_raise = kwargs.pop('do_raise', True)
         ignore_error = kwargs.get('ignore_error')
@@ -134,6 +138,7 @@ class HPXPCommon(object):
     def run_storage_cli(self, *cmd, **kwargs):
         raise NotImplementedError()
 
+    @traceutils.trace_function()
     def get_copy_method(self, metadata):
         method = metadata.get(
             'copy_method', self.conf.hpxp_default_copy_method)
@@ -145,6 +150,9 @@ class HPXPCommon(object):
             raise exception.HPXPError(data=msg)
         return method
 
+    @traceutils.measure_exec_time
+    @traceutils.trace_function()
+    @traceutils.logging_basemethod_exec
     def create_volume(self, volume):
         try:
             ldev = self.create_ldev(volume['size'])
@@ -158,10 +166,11 @@ class HPXPCommon(object):
                 metadata, ldev=ldev, type=utils.NORMAL_LDEV_TYPE),
         }
 
+    @traceutils.trace_function()
     def create_ldev(self, size, is_vvol=False):
         ldev = self.get_unused_ldev()
         self.create_ldev_on_storage(ldev, size, is_vvol)
-        LOG.debug('Created logical device. (LDEV: %s)', ldev)
+        HLOG.info(_LI('Created logical device. (LDEV: %s)'), ldev)
         return ldev
 
     def create_ldev_on_storage(self, ldev, size, is_vvol):
@@ -170,6 +179,9 @@ class HPXPCommon(object):
     def get_unused_ldev(self):
         raise NotImplementedError()
 
+    @traceutils.measure_exec_time
+    @traceutils.trace_function()
+    @traceutils.logging_basemethod_exec
     def create_volume_from_snapshot(self, volume, snapshot):
         ldev = utils.get_ldev(snapshot)
         # When 'ldev' is 0, it should be true.
@@ -192,12 +204,14 @@ class HPXPCommon(object):
                 snapshot=snapshot['id']),
         }
 
+    @traceutils.trace_function()
     def _copy_ldev(self, ldev, size, metadata):
         try:
             return self.copy_on_storage(ldev, size, metadata)
         except exception.HPXPNotImplementedError:
             return self._copy_on_host(ldev, size)
 
+    @traceutils.trace_function()
     def _copy_on_host(self, src_ldev, size):
         dest_ldev = self.create_ldev(size)
         try:
@@ -210,6 +224,7 @@ class HPXPCommon(object):
                     utils.output_log(313, ldev=dest_ldev)
         return dest_ldev, utils.NORMAL_LDEV_TYPE
 
+    @traceutils.trace_function()
     def _copy_with_dd(self, src_ldev, dest_ldev, size):
         src_info = None
         dest_info = None
@@ -227,6 +242,7 @@ class HPXPCommon(object):
                 self._detach_ldev(dest_info, dest_ldev, properties)
         self.discard_zero_page({'provider_location': six.text_type(dest_ldev)})
 
+    @traceutils.trace_function()
     def _attach_ldev(self, ldev, properties):
         volume = {
             'provider_location': six.text_type(ldev),
@@ -249,6 +265,7 @@ class HPXPCommon(object):
             'connector': connector,
         }
 
+    @traceutils.trace_function()
     def _detach_ldev(self, attach_info, ldev, properties):
         volume = {
             'provider_location': six.text_type(ldev),
@@ -261,12 +278,14 @@ class HPXPCommon(object):
             utils.output_log(329, ldev=ldev, reason=six.text_type(ex))
         self._terminate_connection(volume, properties)
 
+    @traceutils.trace_function()
     def _terminate_connection(self, volume, connector):
         try:
             self.terminate_connection(volume, connector)
         except exception.HPXPError:
             utils.output_log(310, ldev=utils.get_ldev(volume))
 
+    @traceutils.trace_function()
     def copy_on_storage(self, pvol, size, metadata):
         is_thin = self.get_copy_method(metadata) == "THIN"
         ldev_type = utils.VVOL_LDEV_TYPE if is_thin else utils.NORMAL_LDEV_TYPE
@@ -284,10 +303,12 @@ class HPXPCommon(object):
     def create_pair_on_storage(self, pvol, svol, is_thin):
         raise NotImplementedError()
 
+    @traceutils.trace_function()
     def _delete_ldev(self, ldev):
         self.delete_pair(ldev)
         self.delete_ldev_from_storage(ldev)
 
+    @traceutils.trace_function()
     def delete_pair(self, ldev, all_split=True):
         pair_info = self.get_pair_info(ldev)
         if not pair_info:
@@ -301,6 +322,7 @@ class HPXPCommon(object):
     def get_pair_info(self, ldev):
         raise NotImplementedError()
 
+    @traceutils.trace_function()
     def delete_pair_based_on_pvol(self, pair_info, all_split):
         svols = []
 
@@ -318,6 +340,7 @@ class HPXPCommon(object):
     def delete_pair_from_storage(self, pvol, svol, is_thin):
         raise NotImplementedError()
 
+    @traceutils.trace_function()
     def delete_pair_based_on_svol(self, pvol, svol_info):
         if not svol_info['is_psus']:
             msg = utils.output_log(616, pvol=pvol, svol=svol_info['ldev'])
@@ -328,6 +351,9 @@ class HPXPCommon(object):
     def delete_ldev_from_storage(self, ldev):
         raise NotImplementedError()
 
+    @traceutils.measure_exec_time
+    @traceutils.trace_function()
+    @traceutils.logging_basemethod_exec
     def create_cloned_volume(self, volume, src_vref):
         ldev = utils.get_ldev(src_vref)
         # When 'ldev' is 0, it should be true.
@@ -348,6 +374,9 @@ class HPXPCommon(object):
                 type=ldev_type, volume=src_vref['id']),
         }
 
+    @traceutils.measure_exec_time
+    @traceutils.trace_function()
+    @traceutils.logging_basemethod_exec
     def delete_volume(self, volume):
         ldev = utils.get_ldev(volume)
         # When 'ldev' is 0, it should be true.
@@ -360,6 +389,9 @@ class HPXPCommon(object):
         except exception.HPXPBusy:
             raise exception.HPXPVolumeIsBusy(volume_name=volume['name'])
 
+    @traceutils.measure_exec_time
+    @traceutils.trace_function()
+    @traceutils.logging_basemethod_exec
     def create_snapshot(self, snapshot):
         src_vref = self.db.volume_get(self.ctxt, snapshot['volume_id'])
         ldev = utils.get_ldev(src_vref)
@@ -379,6 +411,9 @@ class HPXPCommon(object):
             'provider_location': six.text_type(new_ldev),
         }
 
+    @traceutils.measure_exec_time
+    @traceutils.trace_function()
+    @traceutils.logging_basemethod_exec
     def delete_snapshot(self, snapshot):
         ldev = utils.get_ldev(snapshot)
         # When 'ldev' is 0, it should be true.
@@ -392,6 +427,7 @@ class HPXPCommon(object):
         except exception.HPXPBusy:
             raise exception.HPXPSnapshotIsBusy(snapshot_name=snapshot['name'])
 
+    @traceutils.trace_function(loglevel=traceutils.DEBUG)
     def get_volume_stats(self, refresh=False):
         if refresh:
             if self.storage_info['output_first']:
@@ -400,6 +436,7 @@ class HPXPCommon(object):
             self._update_volume_stats()
         return self._stats
 
+    @traceutils.trace_function(loglevel=traceutils.DEBUG)
     def _update_volume_stats(self):
         d = {}
         backend_name = self.conf.safe_get('volume_backend_name')
@@ -419,12 +456,13 @@ class HPXPCommon(object):
             total_gb - free_gb)
         d['reserved_percentage'] = self.conf.safe_get('reserved_percentage')
         d['QoS_support'] = False
-        LOG.debug("Updating volume status. (%s)", d)
+        HLOG.debug(_("Updating volume status. (%s)"), d)
         self._stats = d
 
     def get_pool_info(self):
         raise NotImplementedError()
 
+    @traceutils.trace_function()
     def copy_dest_vol_meta_to_src_vol(self, src_vol, dest_vol):
         metadata = utils.get_volume_metadata(dest_vol)
         try:
@@ -438,6 +476,9 @@ class HPXPCommon(object):
     def discard_zero_page(self, volume):
         raise NotImplementedError()
 
+    @traceutils.measure_exec_time
+    @traceutils.trace_function()
+    @traceutils.logging_basemethod_exec
     def extend_volume(self, volume, new_size):
         ldev = utils.get_ldev(volume)
         # When 'ldev' is 0, it should be true.
@@ -457,6 +498,9 @@ class HPXPCommon(object):
     def extend_ldev(self, ldev, old_size, new_size):
         raise NotImplementedError()
 
+    @traceutils.measure_exec_time
+    @traceutils.trace_function()
+    @traceutils.logging_basemethod_exec
     def manage_existing(self, volume, existing_ref):
         ldev = _str2int(existing_ref.get('ldev'))
         metadata = utils.get_volume_metadata(volume)
@@ -466,6 +510,9 @@ class HPXPCommon(object):
                 metadata, ldev=ldev, type=utils.NORMAL_LDEV_TYPE),
         }
 
+    @traceutils.measure_exec_time
+    @traceutils.trace_function()
+    @traceutils.logging_basemethod_exec
     def manage_existing_get_size(self, dummy_volume, existing_ref):
         if existing_ref.get('storage_id') != self.conf.hpxp_storage_id:
             msg = utils.output_log(700, param='storage_id')
@@ -483,6 +530,9 @@ class HPXPCommon(object):
     def get_ldev_size_in_gigabyte(self, ldev, existing_ref):
         raise NotImplementedError()
 
+    @traceutils.measure_exec_time
+    @traceutils.trace_function()
+    @traceutils.logging_basemethod_exec
     def unmanage(self, volume):
         ldev = utils.get_ldev(volume)
         # When 'ldev' is 0, it should be true.
@@ -500,6 +550,9 @@ class HPXPCommon(object):
         except exception.HPXPBusy:
             raise exception.HPXPVolumeIsBusy(volume_name=volume['name'])
 
+    @traceutils.measure_exec_time
+    @traceutils.trace_function()
+    @traceutils.logging_basemethod_exec
     @utils.synchronized('do_setup')
     def do_setup(self, context):
         self.ctxt = context
@@ -510,6 +563,7 @@ class HPXPCommon(object):
         self.init_cinder_hosts()
         self.output_param_to_log()
 
+    @traceutils.trace_function()
     def check_param(self):
         utils.check_opt_value(self.conf, _INHERITED_VOLUME_OPTS)
         utils.check_opts(self.conf, opts.COMMON_VOLUME_OPTS)
@@ -527,6 +581,7 @@ class HPXPCommon(object):
             self.storage_info['ldev_range'] = self._range2list(
                 'hpxp_ldev_range')
 
+    @traceutils.trace_function()
     def _range2list(self, param):
         values = [_str2int(x) for x in self.conf.safe_get(param).split('-')]
         if (len(values) != 2 or
@@ -539,6 +594,7 @@ class HPXPCommon(object):
     def config_lock(self):
         raise NotImplementedError()
 
+    @traceutils.trace_function()
     def connect_storage(self):
         self.storage_info['pool_id'] = self.get_pool_id()
         # When 'pool_id' is 0, it should be true.
@@ -546,14 +602,16 @@ class HPXPCommon(object):
         if self.storage_info['pool_id'] is None:
             msg = utils.output_log(640, pool=self.conf.hpxp_pool)
             raise exception.HPXPError(data=msg)
-        LOG.debug('Setting pool id: %s', self.storage_info['pool_id'])
+        HLOG.info(_LI('Setting pool id: %s'), self.storage_info['pool_id'])
 
+    @traceutils.trace_function()
     def get_pool_id(self):
         pool = self.conf.hpxp_pool
         if pool.isdigit():
             return int(pool)
         return None
 
+    @traceutils.trace_function()
     def init_cinder_hosts(self, **kwargs):
         targets = kwargs.pop('targets', {'info': {}, 'list': []})
         connector = cinder_utils.brick_get_connector_properties()
@@ -569,6 +627,7 @@ class HPXPCommon(object):
     def find_targets_from_storage(self, targets, connector, target_ports):
         raise NotImplementedError()
 
+    @traceutils.trace_function()
     def create_mapping_targets(self, targets, connector):
         hba_ids = self.get_hba_ids_from_connector(connector)
         for port in targets['info'].keys():
@@ -585,18 +644,21 @@ class HPXPCommon(object):
             self.find_targets_from_storage(
                 targets, connector, targets['info'].keys())
 
+    @traceutils.trace_function(loglevel=traceutils.DEBUG)
     def get_hba_ids_from_connector(self, connector):
         if self.driver_info['hba_id'] in connector:
             return connector[self.driver_info['hba_id']]
         msg = utils.output_log(650, resource=self.driver_info['hba_id_type'])
         raise exception.HPXPError(data=msg)
 
+    @traceutils.trace_function()
     def _create_target(self, targets, port, ip, hba_ids):
         target_name = '-'.join([utils.DRIVER_PREFIX, ip])
         gid = self.create_target_to_storage(port, target_name, hba_ids)
-        LOG.debug(
-            'Created target. (port: %s, gid: %s, target_name: %s)',
-            port, gid, target_name)
+        HLOG.info(
+            _LI('Created target. (port: %(port)s, gid: %(gid)s, '
+                'target_name: %(target)s)'),
+            {'port': port, 'gid': gid, 'target': target_name})
         try:
             self.set_target_mode(port, gid)
             self.set_hba_ids(port, gid, hba_ids)
@@ -618,6 +680,7 @@ class HPXPCommon(object):
     def delete_target_from_storage(self, port, gid):
         raise NotImplementedError()
 
+    @traceutils.trace_function()
     def output_param_to_log(self):
         utils.output_log(1, config_group=self.conf.config_group)
         name, version = self.get_storage_cli_info()
@@ -629,6 +692,9 @@ class HPXPCommon(object):
     def get_storage_cli_info(self):
         raise NotImplementedError()
 
+    @traceutils.measure_exec_time
+    @traceutils.trace_function()
+    @traceutils.logging_basemethod_exec
     def initialize_connection(self, volume, connector):
         targets = {
             'info': {},
@@ -667,6 +733,7 @@ class HPXPCommon(object):
 
         return conn_info
 
+    @traceutils.trace_function()
     def _build_initiator_target_map(self, connector, target_wwns):
         init_targ_map = {}
         initiator_wwns = connector['wwpns']
@@ -682,6 +749,7 @@ class HPXPCommon(object):
                 init_targ_map[initiator] = target_wwns
         return init_targ_map
 
+    @traceutils.trace_function(loglevel=traceutils.DEBUG)
     def get_target_ports(self, connector):
         if connector['ip'] == CONF.my_ip:
             return self.storage_info['ports']
@@ -694,6 +762,7 @@ class HPXPCommon(object):
     def map_ldev(self, targets, ldev):
         raise NotImplementedError()
 
+    @traceutils.trace_function()
     def get_properties(self, volume, targets, target_lun, connector):
         multipath = connector.get('multipath', False)
         if self.storage_info['protocol'] == 'FC':
@@ -706,6 +775,7 @@ class HPXPCommon(object):
             d['target_luns'] = [target_lun] * len(targets['list'])
         return d
 
+    @traceutils.trace_function()
     def get_properties_fc(self, targets):
         d = {}
         d['target_wwn'] = [
@@ -713,6 +783,7 @@ class HPXPCommon(object):
             if targets['info'][x]]
         return d
 
+    @traceutils.trace_function()
     def _get_access_mode(self, volume):
         if 'id' not in volume:
             return 'rw'
@@ -724,6 +795,9 @@ class HPXPCommon(object):
                 'ro' if admin_metadata.get('readonly') == 'True' else 'rw')
         return access_mode
 
+    @traceutils.measure_exec_time
+    @traceutils.trace_function()
+    @traceutils.logging_basemethod_exec
     def terminate_connection(self, volume, connector, **dummy_kwargs):
         targets = {
             'info': {},
@@ -757,12 +831,21 @@ class HPXPCommon(object):
     def unmap_ldev(self, targets, ldev):
         raise NotImplementedError()
 
+    @traceutils.measure_exec_time
+    @traceutils.trace_function()
+    @traceutils.logging_basemethod_exec
     def copy_volume_data(self, context, src_vol, dest_vol, remote=None):
         self.copy_dest_vol_meta_to_src_vol(src_vol, dest_vol)
         self.discard_zero_page(dest_vol)
 
+    @traceutils.measure_exec_time
+    @traceutils.trace_function()
+    @traceutils.logging_basemethod_exec
     def copy_image_to_volume(self, context, volume, image_service, image_id):
         self.discard_zero_page(volume)
 
+    @traceutils.measure_exec_time
+    @traceutils.trace_function()
+    @traceutils.logging_basemethod_exec
     def restore_backup(self, context, backup, volume, backup_service):
         self.discard_zero_page(volume)
