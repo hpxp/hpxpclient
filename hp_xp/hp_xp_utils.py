@@ -27,9 +27,10 @@ from oslo_utils import timeutils
 from oslo_utils import units
 import six
 
-from cinder.i18n import _
+from cinder.i18n import _, _LI
 from cinder import utils as cinder_utils
 from cinder.volume.drivers.san.hp import hp_xp_exception as exception
+from cinder.volume.drivers.san.hp import hp_xp_traceutils as traceutils
 
 _DRIVER_DIR = 'cinder.volume.drivers.san.hp'
 
@@ -465,6 +466,7 @@ MSG_TABLE = {
 }
 
 LOG = logging.getLogger(__name__)
+HLOG = logging.getLogger(traceutils.HLOG_NAME)
 
 
 def synchronized(key):
@@ -512,11 +514,11 @@ def execute(*cmd, **kwargs):
         ret = ex.exit_code
         stdout = ex.stdout
         stderr = ex.stderr
-        LOG.debug('cmd: %s', ' '.join([six.text_type(c) for c in cmd]))
-        LOG.debug('from: %s', inspect.stack()[2])
-        LOG.debug('ret: %s', ret)
-        LOG.debug('stdout: %s', ' '.join(stdout.splitlines()))
-        LOG.debug('stderr: %s', ' '.join(stderr.splitlines()))
+        HLOG.info(_LI('cmd: %s'), ' '.join([six.text_type(c) for c in cmd]))
+        HLOG.info(_LI('from: %s'), inspect.stack()[2])
+        HLOG.info(_LI('ret: %s'), ret)
+        HLOG.info(_LI('stdout: %s'), ' '.join(stdout.splitlines()))
+        HLOG.info(_LI('stderr: %s'), ' '.join(stderr.splitlines()))
     return ret, stdout, stderr
 
 
@@ -545,12 +547,10 @@ def check_ignore_error(ignore_error, stderr):
 def check_opts(conf, opts):
     names = []
     for opt in opts:
-        # @ (#) Check that opts marked as required have values specified.
         if opt.required and not conf.safe_get(opt.name):
             msg = output_log(601, param=opt.name)
             raise exception.HPXPError(data=msg)
         names.append(opt.name)
-    # @ (#) Check whether there are the valid value of options.
     check_opt_value(conf, names)
 
 
@@ -585,4 +585,4 @@ def require_target_existed(targets):
 
 def get_volume_metadata(volume):
     volume_metadata = volume.get('volume_metadata', {})
-    return dict((item['key'], item['value']) for item in volume_metadata)
+    return {item['key']: item['value'] for item in volume_metadata}
