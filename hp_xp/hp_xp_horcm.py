@@ -19,6 +19,7 @@ import re
 
 from oslo_config import cfg
 from oslo_log import log as logging
+
 from oslo_service import loopingcall
 from oslo_utils import excutils
 from oslo_utils import timeutils
