@@ -16,8 +16,11 @@ import re
 
 from oslo_log import log as logging
 
+from cinder.i18n import _LI
 from cinder.volume.drivers.san.hp import hp_xp_exception as exception
 from cinder.volume.drivers.san.hp import hp_xp_horcm as horcm
+from cinder.volume.drivers.san.hp import hp_xp_horcm_ext as horcm_ext
+from cinder.volume.drivers.san.hp import hp_xp_traceutils as traceutils
 from cinder.volume.drivers.san.hp import hp_xp_utils as utils
 
 _HOST_GROUPS_PATTERN = re.compile(
@@ -27,11 +30,12 @@ _FC_PORT_PATTERN = re.compile(
     (r"^(CL\w-\w)\w* +(?:FIBRE|FCoE) +TAR +\w+ +\w+ +\w +\w+ +Y +"
      r"\d+ +\d+ +(\w{16})"), re.M)
 
-LOG = logging.getLogger(__name__)
+HLOG = logging.getLogger(traceutils.HLOG_NAME)
 
 
-class HPXPHORCMFC(horcm.HPXPHORCM):
+class HPXPHORCMFC(horcm_ext.HPXPHORCMExtension):
 
+    @traceutils.trace_function()
     def connect_storage(self):
         target_ports = self.conf.hpxp_target_ports
         compute_target_ports = self.conf.hpxp_compute_target_ports
@@ -50,17 +54,19 @@ class HPXPHORCMFC(horcm.HPXPHORCM):
         if not self.storage_info['ports']:
             msg = utils.output_log(650, resource="Target ports")
             raise exception.HPXPError(data=msg)
-        LOG.debug('Setting target_ports: %s', self.storage_info['ports'])
-        LOG.debug(
-            'Setting compute_target_ports: %s',
+        HLOG.info(_LI('Setting target_ports: %s'), self.storage_info['ports'])
+        HLOG.info(
+            _LI('Setting compute_target_ports: %s'),
             self.storage_info['compute_ports'])
-        LOG.debug('Setting target wwns: %s', self.storage_info['wwns'])
+        HLOG.info(_LI('Setting target wwns: %s'), self.storage_info['wwns'])
 
+    @traceutils.trace_function()
     def create_target_to_storage(self, port, target_name, dummy_hba_ids):
         result = self.run_raidcom(
             'add', 'host_grp', '-port', port, '-host_grp_name', target_name)
         return horcm.find_value(result[1], 'gid')
 
+    @traceutils.trace_function()
     def set_hba_ids(self, port, gid, hba_ids):
         registered_wwns = []
         for wwn in hba_ids:
@@ -78,6 +84,7 @@ class HPXPHORCMFC(horcm.HPXPHORCM):
     def set_target_mode(self, port, gid):
         pass
 
+    @traceutils.trace_function()
     def find_targets_from_storage(self, targets, connector, target_ports):
         nr_not_found = 0
         target_name = '-'.join([utils.DRIVER_PREFIX, connector['ip']])
@@ -97,9 +104,10 @@ class HPXPHORCMFC(horcm.HPXPHORCM):
                 gid = result[1].splitlines()[1].split()[1]
                 targets['info'][port] = True
                 targets['list'].append((port, gid))
-                LOG.debug(
-                    'Found wwpns in host group. '
-                    '(port: %s, gid: %s, wwpns: %s)', port, gid, wwpns)
+                HLOG.info(
+                    _LI('Found wwpns in host group. '
+                        '(port: %(port)s, gid: %(gid)s, wwpns: %(wwpns)s)'),
+                    {'port': port, 'gid': gid, 'wwpns': wwpns})
                 continue
             if self.conf.hpxp_horcm_name_only_discovery:
                 nr_not_found += 1
@@ -114,10 +122,10 @@ class HPXPHORCMFC(horcm.HPXPHORCM):
                 if wwpns:
                     targets['info'][port] = True
                     targets['list'].append((port, gid))
-                    LOG.debug(
-                        'Found wwpns in host group. '
-                        '(port: %s, gid: %s, wwpns: %s)',
-                        port, gid, wwpns)
+                    HLOG.info(
+                        _LI('Found wwpns in host group. (port: %(port)s, '
+                            'gid: %(gid)s, wwpns: %(wwpns)s)'),
+                        {'port': port, 'gid': gid, 'wwpns': wwpns})
                     break
             else:
                 nr_not_found += 1
