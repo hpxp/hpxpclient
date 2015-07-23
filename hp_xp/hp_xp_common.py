@@ -17,7 +17,7 @@ Common class for Hewlett-Packard storage drivers.
 """
 
 import re
-
+#want to remove the code
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import excutils
