@@ -19,19 +19,16 @@ import re
 
 from oslo_config import cfg
 from oslo_log import log as logging
-
 from oslo_service import loopingcall
 from oslo_utils import excutils
 from oslo_utils import timeutils
 from oslo_utils import units
 import six
 
-from cinder.i18n import _LI
 from cinder import utils as cinder_utils
-from cinder.volume.drivers.san.hp import hp_xp_common_ext as common_ext
+from cinder.volume.drivers.san.hp import hp_xp_common as common
 from cinder.volume.drivers.san.hp import hp_xp_exception as exception
 from cinder.volume.drivers.san.hp import hp_xp_opts as opts
-from cinder.volume.drivers.san.hp import hp_xp_traceutils as traceutils
 from cinder.volume.drivers.san.hp import hp_xp_utils as utils
 
 _GETSTORAGEARRAY_ONCE = 1000
@@ -208,7 +205,7 @@ _HORCM_VOLUME_OPTS = [
 CONF = cfg.CONF
 CONF.register_opts(_HORCM_VOLUME_OPTS)
 
-HLOG = logging.getLogger(traceutils.HLOG_NAME)
+LOG = logging.getLogger(__name__)
 
 
 def horcmgr_synchronized(func):
@@ -240,26 +237,22 @@ def find_value(stdout, key):
     return None
 
 
-@traceutils.trace_function()
 def _run_horcmgr(inst):
     result = utils.execute(
         'env', 'HORCMINST=%s' % inst, 'horcmgr', '-check')
     return result[0]
 
 
-@traceutils.trace_function()
 def _run_horcmshutdown(inst):
     result = utils.execute('horcmshutdown.sh', inst)
     return result[0]
 
 
-@traceutils.trace_function()
 def _run_horcmstart(inst):
     result = utils.execute('horcmstart.sh', inst)
     return result[0]
 
 
-@traceutils.trace_function()
 def _check_ldev(ldev_info, ldev, existing_ref):
     if ldev_info['sts'] != NORMAL_STS:
         msg = utils.output_log(701)
@@ -281,7 +274,7 @@ def _check_ldev(ldev_info, ldev, existing_ref):
             existing_ref=existing_ref, reason=msg)
 
 
-class HPXPHORCM(common_ext.HPXPCommonExtension):
+class HPXPHORCM(common.HPXPCommon):
 
     def __init__(self, conf, storage_protocol, **kwargs):
         super(HPXPHORCM, self).__init__(conf, storage_protocol, **kwargs)
@@ -295,7 +288,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
             'p_pool': None,
         }
 
-    @traceutils.trace_function(loglevel=traceutils.DEBUG)
     def run_raidcom(self, *args, **kwargs):
         if 'success_code' not in kwargs:
             kwargs['success_code'] = HORCM_EXIT_CODE
@@ -304,7 +296,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
             '-I%s' % self.conf.hpxp_horcm_numbers[_HORCMGR]]
         return self.run_and_verify_storage_cli(*cmd, **kwargs)
 
-    @traceutils.trace_function(loglevel=traceutils.DEBUG)
     def _run_pair_cmd(self, command, *args, **kwargs):
         kwargs['horcmgr'] = _PAIR_HORCMGR
         if 'success_code' not in kwargs:
@@ -313,7 +304,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
             '-IM%s' % self.conf.hpxp_horcm_numbers[_PAIR_HORCMGR]]
         return self.run_and_verify_storage_cli(*cmd, **kwargs)
 
-    @traceutils.trace_function(loglevel=traceutils.DEBUG)
     def run_storage_cli(self, *cmd, **kwargs):
         interval = kwargs.pop('interval', _EXEC_RETRY_INTERVAL)
         flag = {'ignore_enauth': True}
@@ -329,9 +319,9 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
             result = utils.execute(*cmd, **kwargs)
             if _NOT_LOCKED in result[2] and not utils.check_timeout(
                     start_time, _LOCK_WAITTIME):
-                HLOG.info(
-                    _LI("The resource group to which the operation object "
-                        "belongs is being locked by other software."))
+                LOG.debug(
+                    "The resource group to which the operation object "
+                    "belongs is being locked by other software.")
                 return
             if (result[0] in success_code or
                     utils.check_timeout(start_time, timeout) or
@@ -352,7 +342,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
             flag, *cmd, **kwargs)
         return loop.start(interval=interval).wait()
 
-    @traceutils.trace_function()
     def _retry_login(self, ignore_enauth, do_login):
         if not ignore_enauth:
             if not do_login:
@@ -364,15 +353,12 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
 
         return True
 
-    @traceutils.trace_function()
     def _run_raidcom_login(self, do_raise=True):
         return self.run_raidcom(
             '-login', self.conf.hpxp_horcm_user,
             self.conf.hpxp_horcm_password,
             do_raise=do_raise, do_login=True)
 
-    @traceutils.measure_exec_time
-    @traceutils.trace_function()
     @horcmgr_synchronized
     def _restart_horcmgr(self, horcmgr):
         inst = self.conf.hpxp_horcm_numbers[horcmgr]
@@ -399,14 +385,12 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
                 609, inst=self.conf.hpxp_horcm_numbers[horcmgr])
             raise exception.HPXPError(data=msg)
 
-    @traceutils.trace_function()
     @utils.synchronized('create_ldev')
     def create_ldev(self, size, is_vvol=False):
         ldev = super(HPXPHORCM, self).create_ldev(size, is_vvol=is_vvol)
         self._check_ldev_status(ldev)
         return ldev
 
-    @traceutils.trace_function()
     def _check_ldev_status(self, ldev, delete=False):
         if not delete:
             args = _LDEV_CREATED
@@ -429,7 +413,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
             msg = utils.output_log(msg_id, ldev=ldev)
             raise exception.HPXPError(data=msg)
 
-    @traceutils.trace_function()
     def create_ldev_on_storage(self, ldev, size, is_vvol):
         args = ['add', 'ldev', '-ldev_id', ldev, '-capacity', '%sG' % size,
                 '-emulation', 'OPEN-V', '-pool']
@@ -439,7 +422,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
             args.append(self.conf.hpxp_pool)
         self.run_raidcom(*args)
 
-    @traceutils.trace_function()
     def get_unused_ldev(self):
         if not self.storage_info['ldev_range']:
             ldev_info = self.get_ldev_info(
@@ -454,7 +436,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
             raise exception.HPXPError(data=msg)
         return ldev
 
-    @traceutils.trace_function()
     def _find_unused_ldev_by_range(self):
         success_code = HORCM_EXIT_CODE.union(_INVALID_RANGE)
         start, end = self.storage_info['ldev_range'][:2]
@@ -478,7 +459,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
 
         return None
 
-    @traceutils.trace_function(loglevel=traceutils.DEBUG)
     def get_ldev_info(self, keys, *args, **kwargs):
         d = {}
         result = self.run_raidcom('get', 'ldev', *args, **kwargs)
@@ -486,7 +466,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
             d[key] = find_value(result[1], key)
         return d
 
-    @traceutils.trace_function()
     def copy_on_storage(self, pvol, size, metadata):
         ldev_info = self.get_ldev_info(['sts', 'vol_attr'], '-ldev_id', pvol)
         if ldev_info['sts'] != NORMAL_STS:
@@ -497,7 +476,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
             raise exception.HPXPNotImplementedError()
         return super(HPXPHORCM, self).copy_on_storage(pvol, size, metadata)
 
-    @traceutils.trace_function()
     @utils.synchronized('create_pair')
     def create_pair_on_storage(self, pvol, svol, is_thin):
         path_list = []
@@ -521,7 +499,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
                     except exception.HPXPError:
                         utils.output_log(310, ldev=ldev)
 
-    @traceutils.trace_function()
     def _create_pair_on_storage_core(self, pvol, svol, is_thin, vol_type):
         if is_thin:
             self._create_thin_copy_pair(pvol, svol, vol_type)
@@ -529,7 +506,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
         else:
             self._create_full_copy_pair(pvol, svol, vol_type)
 
-    @traceutils.trace_function()
     def _create_thin_copy_pair(self, pvol, svol, dummy_vol_type):
         snapshot_name = _SNAP_NAME + six.text_type(svol % _SNAP_HASH_SIZE)
         self.run_raidcom(
@@ -550,7 +526,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
                 except exception.HPXPError:
                     utils.output_log(325, pvol=pvol, svol=svol)
 
-    @traceutils.trace_function()
     def _create_full_copy_pair(self, pvol, svol, vol_type):
         mun = 0
 
@@ -602,7 +577,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
                         utils.output_log(
                             322, inst=self.conf.hpxp_horcm_numbers[1])
 
-    @traceutils.trace_function()
     def _get_unused_mun(self, ldev):
         pair_list = []
 
@@ -622,7 +596,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
         msg = utils.output_log(615, copy_method=utils.FULL, pvol=ldev)
         raise exception.HPXPBusy(message=msg)
 
-    @traceutils.trace_function()
     def _get_vol_type_and_pair_info(self, ldev):
         ldev_info = self.get_ldev_info(['sts', 'vol_attr'], '-ldev_id', ldev)
         if ldev_info['sts'] != NORMAL_STS:
@@ -643,7 +616,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
 
         return (SMPL, None)
 
-    @traceutils.trace_function()
     def _get_full_copy_info(self, ldev):
         vol_type, pair_info = self._get_vol_type_and_pair_info(ldev)
         svol_info = []
@@ -661,12 +633,10 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
 
         return (ldev, svol_info)
 
-    @traceutils.trace_function()
     @utils.synchronized('create_pair')
     def delete_pair(self, ldev, all_split=True):
         super(HPXPHORCM, self).delete_pair(ldev, all_split=all_split)
 
-    @traceutils.trace_function()
     def delete_pair_based_on_pvol(self, pair_info, all_split):
         svols = []
         restart = False
@@ -696,11 +666,9 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
                 616, pvol=pair_info['pvol'], svol=', '.join(svols))
             raise exception.HPXPBusy(message=msg)
 
-    @traceutils.trace_function()
     def delete_pair_based_on_svol(self, pvol, svol_info):
         self._delete_pair_based_on_svol(pvol, svol_info)
 
-    @traceutils.trace_function()
     def _delete_pair_based_on_svol(self, pvol, svol_info, no_restart=False):
         do_restart = False
 
@@ -718,7 +686,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
             if not no_restart and do_restart:
                 self._restart_horcmgr(_PAIR_HORCMGR)
 
-    @traceutils.trace_function()
     def delete_pair_from_storage(self, pvol, svol, is_thin):
         interval = self.conf.hpxp_async_copy_check_interval
         if is_thin:
@@ -726,7 +693,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
         else:
             self._delete_full_copy_pair(pvol, svol, interval)
 
-    @traceutils.trace_function()
     def _delete_thin_copy_pair(self, pvol, svol, interval):
         result = self.run_raidcom(
             'get', 'snapshot', '-ldev_id', svol)
@@ -740,7 +706,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
             'delete', 'snapshot', '-ldev_id', pvol, '-mirror_id', mun)
         self._wait_thin_copy_deleting(svol, interval=interval)
 
-    @traceutils.trace_function()
     def _wait_thin_copy_deleting(self, ldev, **kwargs):
         interval = kwargs.pop(
             'interval', self.conf.hpxp_async_copy_check_interval)
@@ -761,7 +726,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
             msg = utils.output_log(611, svol=ldev)
             raise exception.HPXPError(data=msg)
 
-    @traceutils.trace_function()
     def _delete_full_copy_pair(self, pvol, svol, interval):
         stdout = self._run_pairdisplay(
             '-d', self.conf.hpxp_storage_id, svol, 0)
@@ -781,7 +745,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
             if self._is_smpl(svol):
                 self._delete_pair_config(pvol, svol, copy_group, ldev_name)
 
-    @traceutils.trace_function()
     def _initialize_pair_connection(self, ldev):
         port, gid = None, None
 
@@ -794,7 +757,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
         msg = utils.output_log(639, ldev=ldev)
         raise exception.HPXPError(msg)
 
-    @traceutils.trace_function()
     def _terminate_pair_connection(self, ldev):
         targets = {
             'list': [],
@@ -803,17 +765,15 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
         if (ldev_info['sts'] == NORMAL_STS and
                 FULL_ATTR in ldev_info['vol_attr'] or
                 self._get_thin_copy_svol_status(ldev) != SMPL):
-            HLOG.info(
-                _LI('The specified LDEV has pair. Therefore, unmapping '
-                    'operation was skipped. '
-                    '(LDEV: %(ldev)s, vol_attr: %(info)s)'),
+            LOG.debug(
+                'The specified LDEV has pair. Therefore, unmapping '
+                'operation was skipped. (LDEV: %s, vol_attr: %s)',
                 ldev, ldev_info['vol_attr'])
             return
         self._find_mapped_targets_from_storage(
             targets, ldev, self.storage_info['ports'], is_pair=True)
         self.unmap_ldev(targets, ldev)
 
-    @traceutils.trace_function()
     def check_param(self):
         super(HPXPHORCM, self).check_param()
         utils.check_opts(self.conf, opts.HORCM_VOLUME_OPTS)
@@ -823,10 +783,8 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
         if len(insts) != 2 or insts[_HORCMGR] == insts[_PAIR_HORCMGR]:
             msg = utils.output_log(601, param='hpxp_horcm_numbers')
             raise exception.HPXPError(data=msg)
-        HLOG.info(
-            _LI('Setting ldev_range: %s'), self.storage_info['ldev_range'])
+        LOG.debug('Setting ldev_range: %s', self.storage_info['ldev_range'])
 
-    @traceutils.trace_function()
     def _set_copy_groups(self, host_ip):
         serial = self.conf.hpxp_storage_id
         inst = self.conf.hpxp_horcm_numbers[_PAIR_HORCMGR]
@@ -835,9 +793,8 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
         for mun in xrange(_MAX_MUNS):
             copy_group = _COPY_GROUP % (host_ip, serial, inst, mun)
             self._copy_groups[mun] = copy_group
-        HLOG.info(_LI('Setting copy_groups: %s'), self._copy_groups)
+        LOG.debug('Setting copy_groups: %s', self._copy_groups)
 
-    @traceutils.trace_function()
     def connect_storage(self):
         self._set_copy_groups(CONF.my_ip)
 
@@ -855,7 +812,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
             r"^%03d +\w+ +\w+ +\w+ +\w+ +\w+ +\w+ +\w+ +(?P<vcap>\S+) " %
             self.storage_info['pool_id'], re.M)
 
-    @traceutils.trace_function(loglevel=traceutils.DEBUG)
     def _find_lun(self, ldev, port, gid):
         result = self.run_raidcom(
             'get', 'lun', '-port', '-'.join([port, gid]))
@@ -866,7 +822,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
             return m.group('lun')
         return None
 
-    @traceutils.trace_function(loglevel=traceutils.DEBUG)
     def _find_mapped_targets_from_storage(self, targets, ldev,
                                           target_ports, is_pair=False):
         ldev_info = self.get_ldev_info(['ports'], '-ldev_id', ldev)
@@ -877,11 +832,9 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
             if _is_valid_target(ports[0], ports[2], target_ports, is_pair):
                 targets['list'].append(ports[0])
 
-    @traceutils.trace_function(loglevel=traceutils.DEBUG)
     def find_mapped_targets_from_storage(self, targets, ldev, target_ports):
         self._find_mapped_targets_from_storage(targets, ldev, target_ports)
 
-    @traceutils.trace_function()
     def get_unmap_targets_list(self, target_list, mapped_list):
         unmap_list = []
         for mapping_info in mapped_list:
@@ -889,7 +842,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
                 unmap_list.append(mapping_info)
         return unmap_list
 
-    @traceutils.trace_function(loglevel=traceutils.DEBUG)
     def unmap_ldev(self, targets, ldev):
         interval = _LUN_RETRY_INTERVAL
         success_code = HORCM_EXIT_CODE.union([EX_ENOOBJ])
@@ -898,12 +850,10 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
             self.run_raidcom(
                 'delete', 'lun', '-port', target, '-ldev_id', ldev,
                 interval=interval, success_code=success_code, timeout=timeout)
-            HLOG.info(
-                _LI('Deleted logical unit path of the specified logical '
-                    'device. (LDEV: %(ldev)s, host group: %(target)s)'),
-                {'ldev': ldev, 'target': target})
+            LOG.debug(
+                'Deleted logical unit path of the specified logical device. '
+                '(LDEV: %s, host group: %s)', ldev, target)
 
-    @traceutils.trace_function()
     def delete_target_from_storage(self, port, gid):
         result = self.run_raidcom(
             'delete', 'host_grp', '-port',
@@ -911,7 +861,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
         if result[0]:
             utils.output_log(306, port=port, id=gid)
 
-    @traceutils.trace_function()
     def _run_add_lun(self, ldev, port, gid, lun=None):
         args = ['add', 'lun', '-port', '-'.join([port, gid]), '-ldev_id', ldev]
         ignore_error = [_LU_PATH_DEFINED]
@@ -924,24 +873,20 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
         if not lun:
             if result[0] == EX_CMDRJE:
                 lun = self._find_lun(ldev, port, gid)
-                HLOG.info(
-                    _LI('An logical unit path has already defined in the '
-                        'specified logical device. (LDEV: %(ldev)s, '
-                        'port: %(port)s, gid: %(gid)s, lun: %(lun)s)'),
-                    {'ldev': ldev, 'port': port, 'gid': gid, 'lun': lun})
+                LOG.debug(
+                    'An logical unit path has already defined in the '
+                    'specified logical device. (LDEV: %s, port: %s, gid: %s, '
+                    'lun: %s)', ldev, port, gid, lun)
             else:
                 lun = find_value(result[1], 'lun')
         elif _ANOTHER_LDEV_MAPPED in result[2]:
             utils.output_log(314, ldev=ldev, port=port, id=gid, lun=lun)
             return None
-        HLOG.info(
-            _LI('Created logical unit path to the specified logical device. '
-                '(LDEV: %(ldev)s, port: %(port)s, '
-                'gid: %(gid)s, lun: %(lun)s)'),
-            {'ldev': ldev, 'port': port, 'gid': gid, 'lun': lun})
+        LOG.debug(
+            'Created logical unit path to the specified logical device. '
+            '(LDEV: %s, port: %s, gid: %s, lun: %s)', ldev, port, gid, lun)
         return lun
 
-    @traceutils.trace_function()
     def map_ldev(self, targets, ldev):
         port, gid = targets['list'][0]
         lun = self._run_add_lun(ldev, port, gid)
@@ -952,12 +897,10 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
                 utils.output_log(314, ldev=ldev, port=port, id=gid, lun=lun)
         return lun
 
-    @traceutils.trace_function()
     def extend_ldev(self, ldev, old_size, new_size):
         self.run_raidcom('extend', 'ldev', '-ldev_id', ldev, '-capacity',
                          '%sG' % (new_size - old_size))
 
-    @traceutils.trace_function(loglevel=traceutils.DEBUG)
     def get_pool_info(self):
         result = self.run_raidcom('get', 'thp_pool')
         p_pool_m = self._pattern['p_pool'].search(result[1])
@@ -981,7 +924,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
             free_gb = int(math.floor(total_gb - tl_cap))
             return total_gb, free_gb
 
-    @traceutils.trace_function()
     def discard_zero_page(self, volume):
         ldev = utils.get_ldev(volume)
         try:
@@ -991,7 +933,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
         except exception.HPXPError:
             utils.output_log(315, ldev=ldev)
 
-    @traceutils.trace_function()
     def wait_thin_copy(self, ldev, status, **kwargs):
         interval = kwargs.pop(
             'interval', self.conf.hpxp_copy_check_interval)
@@ -1010,7 +951,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
             msg = utils.output_log(611, svol=ldev)
             raise exception.HPXPError(data=msg)
 
-    @traceutils.trace_function()
     def _get_thin_copy_svol_status(self, ldev):
         result = self.run_raidcom(
             'get', 'snapshot', '-ldev_id', ldev)
@@ -1018,7 +958,6 @@ class HPXPHORCM(common_ext.HPXPCommonExtension):
             return SMPL
         return _STATUS_TABLE.get(result[1].splitlines()[1].split()[2], UNKN)
 
-    @traceutils.trace_function()
     def _create_horcm_conf(self, horcmgr=_HORCMGR):
         inst = self.conf.hpxp_horcm_numbers[horcmgr]
         inst = int(inst)
@@ -1046,7 +985,6 @@ HORCM_CMD
                     632, file=filename, ret=result[0], err=result[2])
                 raise exception.HPXPError(data=msg)
 
-    @traceutils.trace_function()
     def init_cinder_hosts(self, **kwargs):
         targets = {
             'info': {},
@@ -1055,7 +993,6 @@ HORCM_CMD
         super(HPXPHORCM, self).init_cinder_hosts(targets=targets)
         self._init_pair_targets(targets['info'])
 
-    @traceutils.trace_function()
     def _init_pair_targets(self, targets_info):
         for port in targets_info.keys():
             if not targets_info[port]:
@@ -1066,10 +1003,9 @@ HORCM_CMD
                 try:
                     gid = self.create_target_to_storage(
                         port, _PAIR_TARGET_NAME, None)
-                    HLOG.info(
-                        _LI('Created host group for pair operation. '
-                            '(port: %(port)s, gid: %(gid)s)'),
-                        {'port': port, 'gid': gid})
+                    LOG.debug(
+                        'Created host group for pair operation. '
+                        '(port: %s, gid: %s)', port, gid)
                 except exception.HPXPError:
                     utils.output_log(308, port=port)
                     continue
@@ -1079,15 +1015,13 @@ HORCM_CMD
             msg = utils.output_log(638)
             raise exception.HPXPError(msg)
         self._pair_targets.sort(reverse=True)
-        HLOG.info(_LI('Setting pair_targets: %s'), self._pair_targets)
+        LOG.debug('Setting pair_targets: %s', self._pair_targets)
 
-    @traceutils.trace_function()
     @utils.synchronized('create_ldev')
     def delete_ldev_from_storage(self, ldev):
         self._delete_ldev_from_storage(ldev)
         self._check_ldev_status(ldev, delete=True)
 
-    @traceutils.trace_function()
     def _delete_ldev_from_storage(self, ldev):
         result = self.run_raidcom(
             'get', 'ldev', '-ldev_id', ldev, *_LDEV_DELETED, do_raise=False)
@@ -1096,14 +1030,12 @@ HORCM_CMD
             return
         self.run_raidcom('delete', 'ldev', '-ldev_id', ldev)
 
-    @traceutils.trace_function()
     def _run_pairdisplay(self, *args):
         result = self._run_pair_cmd(
             'pairdisplay', '-CLI', *args, do_raise=False,
             success_code=HORCM_EXIT_CODE.union(_NO_SUCH_DEVICE))
         return result[1]
 
-    @traceutils.trace_function()
     def _check_copy_grp(self, copy_group):
         count = 0
         result = self.run_raidcom('get', 'copy_grp')
@@ -1115,7 +1047,6 @@ HORCM_CMD
                     break
         return count
 
-    @traceutils.trace_function()
     def _check_device_grp(self, group_name, ldev, ldev_name=None):
         result = self.run_raidcom(
             'get', 'device_grp', '-device_grp_name', group_name)
@@ -1128,7 +1059,6 @@ HORCM_CMD
                     return line[1] == ldev_name
         return False
 
-    @traceutils.trace_function()
     def _is_smpl(self, ldev):
         stdout = self._run_pairdisplay(
             '-d', self.conf.hpxp_storage_id, ldev, 0)
@@ -1136,7 +1066,6 @@ HORCM_CMD
             return True
         return stdout.splitlines()[2].split()[9] in _SMPL_STAUS
 
-    @traceutils.trace_function()
     def _get_full_copy_pair_info(self, ldev, mun):
         stdout = self._run_pairdisplay(
             '-d', self.conf.hpxp_storage_id, ldev, mun)
@@ -1146,10 +1075,9 @@ HORCM_CMD
         if not line[8].isdigit() or not line[12].isdigit():
             return None
         pvol, svol = int(line[12]), int(line[8])
-        HLOG.info(
-            _LI('Full copy pair status. (P-VOL: %(pvol)s, S-VOL: %(svol)s, '
-                'status: %(status)s)'),
-            {'pvol': pvol, 'svol': svol, 'status': line[10]})
+        LOG.debug(
+            'Full copy pair status. (P-VOL: %s, S-VOL: %s, status: %s)',
+            pvol, svol, line[10])
         return {
             'pvol': pvol,
             'svol_info': {
@@ -1159,7 +1087,6 @@ HORCM_CMD
             },
         }
 
-    @traceutils.trace_function()
     def _get_thin_copy_info(self, ldev):
         result = self.run_raidcom(
             'get', 'snapshot', '-ldev_id', ldev)
@@ -1172,13 +1099,11 @@ HORCM_CMD
             pvol, svol = ldev, int(line[6])
         else:
             pvol, svol = int(line[6]), ldev
-        HLOG.info(
-            _LI('Thin copy pair status. (P-VOL: %(pvol)s, S-VOL: %(svol)s, '
-                'status: %(status)s)'),
-            {'pvol': pvol, 'svol': svol, 'status': line[2]})
+        LOG.debug(
+            'Thin copy pair status. (P-VOL: %s, S-VOL: %s, status: %s)',
+            pvol, svol, line[2])
         return (pvol, [{'ldev': svol, 'is_thin': True, 'is_psus': is_psus}])
 
-    @traceutils.trace_function()
     def get_pair_info(self, ldev):
         pair_info = {}
         ldev_info = self.get_ldev_info(['sts', 'vol_attr'], '-ldev_id', ldev)
@@ -1206,7 +1131,6 @@ HORCM_CMD
 
         return pair_info
 
-    @traceutils.trace_function()
     def _add_pair_config(self, pvol, svol, copy_group, ldev_name, mun):
         pvol_group = copy_group + 'P'
         svol_group = copy_group + 'S'
@@ -1228,7 +1152,6 @@ HORCM_CMD
                 '-IM%s' % self.conf.hpxp_horcm_numbers[_HORCMGR],
                 success_code=HORCM_EXIT_CODE)
 
-    @traceutils.trace_function()
     def _delete_pair_config(self, pvol, svol, copy_group, ldev_name):
         pvol_group = copy_group + 'P'
         svol_group = copy_group + 'S'
@@ -1241,7 +1164,6 @@ HORCM_CMD
                 'delete', 'device_grp', '-device_grp_name',
                 svol_group, '-ldev_id', svol)
 
-    @traceutils.trace_function()
     def _wait_full_copy(self, ldev, status, **kwargs):
         interval = kwargs.pop(
             'interval', self.conf.hpxp_copy_check_interval)
@@ -1261,21 +1183,18 @@ HORCM_CMD
             msg = utils.output_log(610, svol=ldev)
             raise exception.HPXPError(data=msg)
 
-    @traceutils.trace_function()
     def _run_pairevtwait(self, ldev):
         result = self._run_pair_cmd(
             'pairevtwait', '-d', self.conf.hpxp_storage_id,
             ldev, '-nowaits')
         return result[0]
 
-    @traceutils.trace_function()
     def get_ldev_size_in_gigabyte(self, ldev, existing_ref):
         ldev_info = self.get_ldev_info(
             _CHECK_KEYS, '-ldev_id', ldev, do_raise=False)
         _check_ldev(ldev_info, ldev, existing_ref)
         return ldev_info['vol_size'] / utils.GIGABYTE_PER_BLOCK_SIZE
 
-    @traceutils.trace_function()
     def get_pool_id(self):
         pool_id = super(HPXPHORCM, self).get_pool_id()
         if pool_id is None:
@@ -1287,7 +1206,6 @@ HORCM_CMD
                     return int(line[0])
         return pool_id
 
-    @traceutils.trace_function()
     def config_lock(self):
         if not CONF.hpxp_horcm_enable_resource_group:
             storage = self.conf.hpxp_storage_id
@@ -1302,7 +1220,6 @@ HORCM_CMD
         self.lock[_PAIR_HORCMGR] = (
             'horcmgr_%s' % self.conf.hpxp_horcm_numbers[_PAIR_HORCMGR])
 
-    @traceutils.trace_function()
     @horcmgr_synchronized
     def _start_horcmgr(self, horcmgr):
         inst = self.conf.hpxp_horcm_numbers[horcmgr]
@@ -1314,13 +1231,11 @@ HORCM_CMD
             return False
         return True
 
-    @traceutils.trace_function()
     def output_param_to_log(self):
         super(HPXPHORCM, self).output_param_to_log()
         utils.output_opts(self.conf, opts.HORCM_VOLUME_OPTS)
         utils.output_opt_info(CONF, _HORCM_OPT_NAMES)
 
-    @traceutils.trace_function()
     def get_storage_cli_info(self):
         version = 'N/A'
         result = utils.execute('raidqry', '-h')
@@ -1329,7 +1244,6 @@ HORCM_CMD
             version = m.group('version')
         return ('RAID Manager', version)
 
-    @traceutils.trace_function()
     def check_vvol(self, ldev):
         ldev_info = self.get_ldev_info(['sts', 'vol_attr'], '-ldev_id', ldev)
         if ldev_info['sts'] != NORMAL_STS:
