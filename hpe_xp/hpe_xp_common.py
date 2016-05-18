@@ -651,7 +651,7 @@ class HPEXPCommon(object):
 
         targets['list'].sort()
         self.modify_target_mode(volume, targets)
-        target_lun = self.map_ldev(targets, ldev)
+        target_lun = int(self.map_ldev(targets, ldev))
 
         conn_info = {
             'driver_volume_type': self.driver_info['volume_type'],
