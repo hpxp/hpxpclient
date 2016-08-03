@@ -336,11 +336,14 @@ class HPEXPCommon(object):
             msg = utils.output_log(624, type='volume', id=src_vref['id'])
             raise exception.HPEXPError(data=msg)
         size = volume['size']
-        if size != src_vref['size']:
+        metadata = volume.get('metadata', {})
+        if size < src_vref['size']:
             msg = utils.output_log(617, type='volume', volume_id=volume['id'])
             raise exception.HPEXPError(data=msg)
-        metadata = volume.get('metadata', {})
-        new_ldev, ldev_type = self._copy_ldev(ldev, size, metadata)
+        elif size == src_vref['size']:
+            new_ldev, ldev_type = self._copy_ldev(ldev, size, metadata)
+        else:
+            new_ldev, ldev_type = self._copy_on_host(ldev, size)
         return {
             'provider_location': six.text_type(new_ldev),
             'metadata': dict(
@@ -766,3 +769,4 @@ class HPEXPCommon(object):
 
     def restore_backup(self, context, backup, volume, backup_service):
         self.discard_zero_page(volume)
+
